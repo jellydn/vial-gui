@@ -1,0 +1,96 @@
+name: Beta Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  beta-release:
+    runs-on: macos-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Get version info
+        id: version
+        run: |
+          # Get current date
+          DATE=$(date +%Y%m%d)
+
+          # Get commit short hash
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+
+          # Create beta version string using date-based format
+          BETA_VERSION="beta-${DATE}-${COMMIT_SHA}"
+
+          # Get commit message for changelog
+          COMMIT_MESSAGE=$(git log -1 --pretty=format:"%s")
+
+          echo "version=$BETA_VERSION" >> $GITHUB_OUTPUT
+
+          # Create changelog
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "Auto beta release from main branch" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "Commit: $COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "Message: $COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+          echo "Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "This is an automated beta release from the main branch." >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create beta branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create and checkout beta branch
+          git checkout -b beta-${{ steps.version.outputs.version }}
+
+          git push origin beta-${{ steps.version.outputs.version }}
+
+      - name: Get Python
+        run: curl https://www.python.org/ftp/python/3.6.8/python-3.6.8-macosx10.9.pkg -o "python.pkg"
+
+      - name: Verify download
+        run: shasum -a 256 -c <<< '4bcd53faffc98d193ef7cdccd5668de3829c702af4db45258819a84a2cab60d0 *python.pkg'
+
+      - name: Install Python
+        run: |
+          sudo installer -pkg python.pkg -target /
+
+      - name: Setup venv
+        run: |
+          python3.6 -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Build
+        run: |
+          source venv/bin/activate
+          fbs freeze
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname Vial -srcfolder "target/Vial.app" -ov -format UDZO "vial-${{ steps.version.outputs.version }}.dmg"
+
+      - name: Create GitHub Beta Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: "Beta Release ${{ steps.version.outputs.version }}"
+          body: ${{ steps.version.outputs.changelog }}
+          draft: false
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          files: |
+            vial-${{ steps.version.outputs.version }}.dmg
